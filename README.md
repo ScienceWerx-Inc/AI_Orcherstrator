@@ -138,6 +138,7 @@ uvicorn app.main:app --port 8000
 - [Routing](docs/routing.md) — filters, scoring formulas, fallback and circuits.
 - [Security](docs/security.md) — auth, key handling, tenant isolation, production checklist.
 - [API](docs/api.md) — OpenAI endpoints, admin API, errors, examples.
+- [Integrations](docs/integrations.md) — connecting ScienceWerx, MoreWerx and other apps.
 - [Operations](docs/operations.md) — setup, Docker, tests, monitoring, troubleshooting.
 - [Roadmap](docs/roadmap.md) — Phase 1 acceptance evidence and later phases.
 
