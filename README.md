@@ -119,6 +119,7 @@ docs               Architecture, database, routing, security, API, operations, r
 | `pnpm db:migrate` | create/apply a migration in development |
 | `pnpm db:deploy` | apply migrations in production/CI |
 | `pnpm db:seed` | idempotent development seed |
+| `pnpm onboard` | create/update a product org, admin, projects, budgets and app keys |
 | `pnpm db:studio` | Prisma Studio |
 
 ML service:

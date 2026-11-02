@@ -53,6 +53,21 @@ Record the gateway URL and key as application secrets. Never expose them to the
 browser: the apps call the gateway from server code only, like they call
 Gemini today.
 
+The repository ships an idempotent onboarding script for this step:
+
+```bash
+ONBOARD_ADMIN_EMAIL="admin@sciencewerx.org" \
+ONBOARD_ADMIN_PASSWORD="$(openssl rand -base64 18)" \
+ONBOARD_PROJECTS="sciencewerx:ScienceWerx,morewerx:MoreWerx" \
+ONBOARD_DEMO_USAGE=true \
+pnpm onboard
+```
+
+It renames/creates the organisation, creates the admin and projects, attaches
+every registered model, writes hard daily/monthly budgets, issues one
+`chat,embeddings` key per project (shown once) and optionally seeds clearly
+labelled demo usage. See [operations.md](./operations.md#onboard-a-product-organisation).
+
 ## 3. Application side (ScienceWerx / MoreWerx)
 
 Both apps share the same architecture:

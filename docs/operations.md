@@ -51,6 +51,29 @@ The seed prints development API keys once. Admin login is `admin@local.dev` /
 `admin12345` unless overridden by `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`. Change these before
 any shared deployment.
 
+### Onboard a product organisation
+
+`pnpm onboard` creates the tenancy for real products without touching app code. It is
+idempotent: re-running it updates names/budgets, resets the admin password when a password is
+supplied, and leaves existing API keys alone.
+
+```bash
+ONBOARD_ORG_NAME="ScienceWerx" \
+ONBOARD_ADMIN_NAME="ScienceWerx Admin" \
+ONBOARD_ADMIN_EMAIL="admin@sciencewerx.org" \
+ONBOARD_ADMIN_PASSWORD="$(openssl rand -base64 18)" \
+ONBOARD_PROJECTS="sciencewerx:ScienceWerx,morewerx:MoreWerx" \
+ONBOARD_MONTHLY_BUDGET_USD=500 \
+ONBOARD_DAILY_BUDGET_USD=25 \
+ONBOARD_DEMO_USAGE=true \
+pnpm onboard
+```
+
+Without `ONBOARD_ADMIN_PASSWORD` the script generates one and prints it once. Demo usage rows
+are written only to projects that have no traffic yet and are labelled
+`routingDecision.seeded = true`. `ONBOARD_ARCHIVE_SLUGS` archives old demo projects
+(comma-separated slugs).
+
 ### Environment files
 
 - Root `.env` is read by the gateway and Prisma. `apps/gateway/.env` is a symlink to it in this
@@ -236,7 +259,8 @@ or the limit is raised. Soft alerts are deduplicated per budget window.
 | --- | --- |
 | Gateway exits on boot | Environment validation prints the missing/short variable. `JWT_SECRET` ≥ 32 chars, `ENCRYPTION_KEY` decodes to 32 bytes, `DATABASE_URL` present. |
 | `503` from dashboard | `GATEWAY_URL` reachable from the dashboard process/container. In Compose it must be `http://gateway:4000`, not `localhost`. |
-| Login returns 401 | Wrong password; user inactive; membership missing. The seed admin is only created by `pnpm db:seed`. |
+| Login returns 401 | Wrong password; user inactive; membership missing. The seed admin is only created by `pnpm db:seed`; product accounts are created by `pnpm onboard`. |
+| Login page loops or shows nothing | A stale `ai_mw_token` cookie from another database/environment. Visit `/api/auth/logout?next=/login`, or clear cookies for the dashboard origin. `/login` is always reachable now, and a 401 clears the cookie automatically. |
 | `422 no_models_available` | Project allowlist is empty. Add models in the project or via `allowedModelIds`. |
 | `422 model_not_available` | Requested `model` slug is not in the project allowlist. |
 | `429` | RPM/TPM/concurrency limit. Inspect `Retry-After`; raise limits on the project. |

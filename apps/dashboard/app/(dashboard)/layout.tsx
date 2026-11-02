@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getSession();
-  if (!user) redirect("/login");
+  // Clear a stale token on the way out; /login itself is always reachable.
+  if (!user) redirect("/api/auth/logout?next=/login");
 
   return (
     <div className="min-h-screen">

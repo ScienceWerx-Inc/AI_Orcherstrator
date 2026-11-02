@@ -17,6 +17,7 @@
     "db:migrate": "pnpm --filter @ai-mw/gateway prisma:migrate",
     "db:deploy": "pnpm --filter @ai-mw/gateway prisma:deploy",
     "db:seed": "pnpm --filter @ai-mw/gateway prisma:seed",
+    "onboard": "pnpm --filter @ai-mw/gateway onboard",
     "db:studio": "pnpm --filter @ai-mw/gateway prisma:studio",
     "format": "prettier --write ."
   },

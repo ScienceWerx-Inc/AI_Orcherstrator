@@ -69,7 +69,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (response.status === 401 && redirectOn401) {
-    redirect("/login");
+    // Clear the stale cookie on the way out; otherwise /login would keep
+    // seeing an invalid token on the next request.
+    redirect("/api/auth/logout?next=/login");
   }
 
   const body = (await response.json().catch(() => null)) as

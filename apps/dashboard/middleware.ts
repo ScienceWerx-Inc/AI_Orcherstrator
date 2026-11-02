@@ -12,9 +12,10 @@ export function middleware(request: NextRequest) {
   const hasToken = Boolean(request.cookies.get(TOKEN_COOKIE)?.value);
 
   if (pathname === "/login") {
-    if (hasToken) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
+    // Do not bounce back to "/" just because a cookie exists: if the token is
+    // stale (e.g. issued against a different database), "/" redirects here
+    // again and the browser gets an infinite redirect loop. The login page is
+    // always reachable; a successful login replaces the cookie.
     return NextResponse.next();
   }
 
