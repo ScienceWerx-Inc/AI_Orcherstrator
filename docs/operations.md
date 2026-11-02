@@ -260,7 +260,7 @@ or the limit is raised. Soft alerts are deduplicated per budget window.
 | Gateway exits on boot | Environment validation prints the missing/short variable. `JWT_SECRET` ≥ 32 chars, `ENCRYPTION_KEY` decodes to 32 bytes, `DATABASE_URL` present. |
 | `503` from dashboard | `GATEWAY_URL` reachable from the dashboard process/container. In Compose it must be `http://gateway:4000`, not `localhost`. |
 | Login returns 401 | Wrong password; user inactive; membership missing. The seed admin is only created by `pnpm db:seed`; product accounts are created by `pnpm onboard`. |
-| Login page loops or shows nothing | A stale `ai_mw_token` cookie from another database/environment. Visit `/api/auth/logout?next=/login`, or clear cookies for the dashboard origin. `/login` is always reachable now, and a 401 clears the cookie automatically. |
+| Login page loops or shows nothing | A stale `ai_mw_token` cookie from another database/environment, or opening the dashboard over plain `http` via a hostname/IP that a browser treats as insecure. Visit `/api/auth/logout?next=/login`, or use the "Clear the old session" link on the login page. The session cookie is only marked `Secure` when the request is HTTPS, so `http://localhost:3000` and `http://<lan-ip>:3000` both work. |
 | `422 no_models_available` | Project allowlist is empty. Add models in the project or via `allowedModelIds`. |
 | `422 model_not_available` | Requested `model` slug is not in the project allowlist. |
 | `429` | RPM/TPM/concurrency limit. Inspect `Retry-After`; raise limits on the project. |

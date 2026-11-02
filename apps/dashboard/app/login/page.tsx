@@ -35,6 +35,16 @@ export default function LoginPage({
         <p className="mt-6 text-center text-[11px] text-slate-600">
           Sessions are stored in an httpOnly cookie and verified by the gateway on every request.
         </p>
+        <p className="mt-2 text-center text-[11px] text-slate-600">
+          Stuck on this page?{" "}
+          <a
+            href="/api/auth/logout?next=/login"
+            className="text-sky-400 underline underline-offset-2 hover:text-sky-300"
+          >
+            Clear the old session
+          </a>{" "}
+          and sign in again.
+        </p>
       </div>
     </main>
   );

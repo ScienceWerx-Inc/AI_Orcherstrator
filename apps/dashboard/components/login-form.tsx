@@ -1,11 +1,9 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { buttonClasses, fieldClasses, labelClasses } from "./ui";
 
 export function LoginForm({ next, showDemo }: { next: string; showDemo: boolean }) {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +24,12 @@ export function LoginForm({ next, showDemo }: { next: string; showDemo: boolean 
         setError(body?.error ?? "Unable to sign in");
         return;
       }
-      router.replace(next || "/");
-      router.refresh();
+      // Hard navigation, not router.replace + refresh: the router cache can
+      // render the previous (unauthenticated) page before the new cookie is
+      // applied, which shows up as a login loop. A full load always sends the
+      // fresh cookie and lets the server decide.
+      const target = next && next.startsWith("/") && !next.startsWith("/login") ? next : "/";
+      window.location.assign(target);
     } catch {
       setError("Unable to reach the dashboard API");
     } finally {

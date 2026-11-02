@@ -16,12 +16,19 @@ export async function POST(request: Request) {
   try {
     const token = await login(payload.email, payload.password);
     const response = NextResponse.json({ ok: true });
+    // Only flag the cookie Secure on an actual HTTPS request. `next start` sets
+    // NODE_ENV=production, but a local dashboard is served over http:// — a
+    // Secure cookie there is rejected by several browsers (and always rejected
+    // when the app is opened via a LAN IP), which makes login appear to bounce
+    // straight back to /login.
+    const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    const secure = (forwardedProto ?? new URL(request.url).protocol.replace(":", "")) === "https";
     response.cookies.set({
       name: TOKEN_COOKIE,
       value: token,
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure,
       path: "/",
       maxAge: 60 * 60 * 8,
     });
