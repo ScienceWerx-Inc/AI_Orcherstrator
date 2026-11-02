@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Runtime
+*.log
+logs/
+tmp/
+.DS_Store
+
+# Prisma
+apps/gateway/prisma/*.db
+apps/gateway/prisma/migrations/*.sql.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Docker / data
+infra/grafana/data/
+infra/prometheus/data/
+/models/

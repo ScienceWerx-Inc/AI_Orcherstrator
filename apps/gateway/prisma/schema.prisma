@@ -1,0 +1,751 @@
+// AI Middleware — normalized multi-tenant schema (PostgreSQL).
+// Money is stored as Decimal(14,6) and always accompanied by a pricing version
+// reference so historical reports remain stable when prices change.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Enums ────────────────────────────────────
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ProjectStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum ProviderType {
+  OPENAI
+  ANTHROPIC
+  GEMINI
+  OLLAMA
+  OPENAI_COMPATIBLE
+  MOCK
+}
+
+enum ProviderStatus {
+  ACTIVE
+  DEGRADED
+  DISABLED
+}
+
+enum ModelType {
+  CHAT
+  EMBEDDING
+  IMAGE
+  AUDIO_TRANSCRIPTION
+  AUDIO_SPEECH
+  VIDEO
+}
+
+enum Modality {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+}
+
+enum ModelStatus {
+  ACTIVE
+  DEGRADED
+  OFFLINE
+}
+
+enum DeploymentKind {
+  EXTERNAL
+  SELF_HOSTED
+}
+
+enum DeploymentStatus {
+  PENDING
+  DEPLOYING
+  READY
+  FAILED
+  STOPPED
+}
+
+enum RoutingPolicyKind {
+  CHEAPEST
+  LOWEST_LATENCY
+  HIGHEST_QUALITY
+  PREFERRED_FALLBACK
+  TASK_BASED
+  CUSTOM_WEIGHTED
+}
+
+enum BudgetPeriod {
+  DAILY
+  MONTHLY
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum RequestStatus {
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  RATE_LIMITED
+  BUDGET_EXCEEDED
+}
+
+enum DatasetStatus {
+  UPLOADED
+  VALIDATING
+  VALIDATED
+  REJECTED
+}
+
+enum TrainingStatus {
+  QUEUED
+  PREPARING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum EvaluationStatus {
+  PENDING
+  RUNNING
+  PASSED
+  FAILED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  RETRYING
+  DEAD_LETTER
+}
+
+enum JobPriority {
+  CRITICAL
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum DocumentStatus {
+  PENDING
+  INGESTING
+  READY
+  FAILED
+}
+
+// ───────────────────────────── Tenancy / auth ─────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  projects        Project[]
+  providers       Provider[]
+  models          Model[]
+  routingPolicies RoutingPolicy[]
+  alerts          Alert[]
+  auditLogs       AuditLog[]
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  name         String
+  passwordHash String
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  memberships Membership[]
+  auditLogs   AuditLog[]
+}
+
+model Membership {
+  id     String @id @default(uuid()) @db.Uuid
+  orgId  String @db.Uuid
+  userId String @db.Uuid
+  role   Role   @default(MEMBER)
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+}
+
+model Project {
+  id                    String        @id @default(uuid()) @db.Uuid
+  orgId                 String        @db.Uuid
+  name                  String
+  slug                  String
+  description           String?
+  status                ProjectStatus @default(ACTIVE)
+  allowedModalities     Modality[]    @default([TEXT])
+  rateLimitRpm          Int           @default(120)
+  rateLimitTpm          Int           @default(200000)
+  maxConcurrentRequests Int           @default(10)
+  maxRequestTokens      Int           @default(32000)
+  retentionDays         Int           @default(30)
+  defaultPolicyId       String?       @db.Uuid
+  settings              Json          @default("{}")
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  organization    Organization                @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  defaultPolicy   RoutingPolicy?              @relation("ProjectDefaultPolicy", fields: [defaultPolicyId], references: [id], onDelete: SetNull)
+  apiKeys         ProjectApiKey[]
+  allowedModels   ProjectModel[]
+  providerPrefs   ProjectProviderPreference[]
+  requests        AiRequest[]
+  usageRecords    UsageRecord[]
+  costRecords     CostRecord[]
+  budgets         Budget[]
+  alerts          Alert[]
+  datasets        Dataset[]
+  trainingJobs    TrainingJob[]
+  fineTunedModels FineTunedModel[]
+  documents       Document[]
+  backgroundJobs  BackgroundJob[]
+  auditLogs       AuditLog[]
+
+  @@unique([orgId, slug])
+  @@index([orgId, status])
+  @@index([defaultPolicyId])
+}
+
+model ProjectApiKey {
+  id         String    @id @default(uuid()) @db.Uuid
+  projectId  String    @db.Uuid
+  name       String
+  prefix     String
+  keyHash    String    @unique
+  scopes     String[]
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdBy  String?   @db.Uuid
+  createdAt  DateTime  @default(now())
+
+  project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requests AiRequest[]
+
+  @@index([projectId, revokedAt])
+  @@index([prefix])
+}
+
+// ────────────────────────── Providers / registry ──────────────────────────
+
+model Provider {
+  id                   String         @id @default(uuid()) @db.Uuid
+  orgId                String         @db.Uuid
+  name                 String
+  slug                 String
+  type                 ProviderType
+  baseUrl              String?
+  encryptedCredentials String // AES-256-GCM ciphertext; never returned by the API
+  status               ProviderStatus @default(ACTIVE)
+  timeoutMs            Int            @default(60000)
+  maxConcurrency       Int            @default(50)
+  priority             Int            @default(50)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  organization  Organization                @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  models        Model[]
+  providerPrefs ProjectProviderPreference[]
+  usageRecords  UsageRecord[]
+  costRecords   CostRecord[]
+
+  @@unique([orgId, slug])
+  @@index([orgId, status])
+}
+
+model Model {
+  id                String         @id @default(uuid()) @db.Uuid
+  orgId             String         @db.Uuid
+  providerId        String         @db.Uuid
+  slug              String
+  displayName       String
+  modelType         ModelType      @default(CHAT)
+  externalModelId   String
+  modalities        Modality[]     @default([TEXT])
+  contextWindow     Int
+  maxOutputTokens   Int            @default(4096)
+  supportsStreaming Boolean        @default(true)
+  deploymentKind    DeploymentKind @default(EXTERNAL)
+  status            ModelStatus    @default(ACTIVE)
+  qualityScore      Int            @default(50)
+  expectedLatencyMs Int            @default(1000)
+  maxConcurrency    Int            @default(50)
+  gpuHourlyCostUsd  Decimal?       @db.Decimal(12, 4)
+  quantization      String?
+  version           String         @default("1")
+  metadata          Json           @default("{}")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  organization      Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  provider          Provider          @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  pricing           ModelPricing[]
+  deployments       ModelDeployment[]
+  projectModels     ProjectModel[]
+  requests          AiRequest[]
+  usageRecords      UsageRecord[]
+  costRecords       CostRecord[]
+  trainingJobs      TrainingJob[]     @relation("TrainingBaseModel")
+  fineTunedFrom     FineTunedModel[]  @relation("FineTunedBaseModel")
+  deployedFineTuned FineTunedModel[]  @relation("FineTunedDeployment")
+  evaluations       ModelEvaluation[] @relation("BaselineModel")
+  evaluatedModels   ModelEvaluation[] @relation("EvaluatedModel")
+  chunks            DocumentChunk[]
+
+  @@unique([orgId, slug])
+  @@index([orgId, modelType, status])
+  @@index([providerId])
+}
+
+model ModelPricing {
+  id             String    @id @default(uuid()) @db.Uuid
+  modelId        String    @db.Uuid
+  currency       String    @default("USD") @db.Char(3)
+  inputPer1m     Decimal   @db.Decimal(14, 6)
+  outputPer1m    Decimal   @db.Decimal(14, 6)
+  imagePerUnit   Decimal?  @db.Decimal(14, 6)
+  audioPerSecond Decimal?  @db.Decimal(14, 6)
+  effectiveFrom  DateTime  @default(now())
+  effectiveTo    DateTime?
+  createdAt      DateTime  @default(now())
+
+  model        Model         @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  usageRecords UsageRecord[]
+  costRecords  CostRecord[]
+
+  @@index([modelId, effectiveFrom])
+}
+
+model ModelDeployment {
+  id           String           @id @default(uuid()) @db.Uuid
+  modelId      String           @db.Uuid
+  kind         DeploymentKind
+  status       DeploymentStatus @default(PENDING)
+  endpoint     String?
+  hardware     Json             @default("{}")
+  quantization String?
+  replicas     Int              @default(1)
+  lastHealthAt DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  model Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId, status])
+}
+
+model ProjectModel {
+  projectId String   @db.Uuid
+  modelId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  model   Model   @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, modelId])
+}
+
+model ProjectProviderPreference {
+  projectId  String @db.Uuid
+  providerId String @db.Uuid
+  priority   Int    @default(100)
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, providerId])
+}
+
+// ───────────────────────────── Routing policies ───────────────────────────
+
+model RoutingPolicy {
+  id          String            @id @default(uuid()) @db.Uuid
+  orgId       String            @db.Uuid
+  name        String
+  slug        String
+  kind        RoutingPolicyKind
+  description String?
+  isDefault   Boolean           @default(false)
+  config      Json              @default("{}")
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  projects     Project[]    @relation("ProjectDefaultPolicy")
+  requests     AiRequest[]
+
+  @@unique([orgId, slug])
+  @@index([orgId, isDefault])
+}
+
+// ─────────────────────────── Requests / metering ──────────────────────────
+
+model AiRequest {
+  id              String        @id @default(uuid()) @db.Uuid
+  traceId         String
+  orgId           String        @db.Uuid
+  projectId       String        @db.Uuid
+  apiKeyId        String?       @db.Uuid
+  providerId      String?       @db.Uuid
+  modelId         String?       @db.Uuid
+  policyId        String?       @db.Uuid
+  endpoint        String
+  modality        Modality      @default(TEXT)
+  status          RequestStatus
+  httpStatus      Int
+  routingDecision Json          @default("{}")
+  inputTokens     Int           @default(0)
+  outputTokens    Int           @default(0)
+  totalTokens     Int           @default(0)
+  costUsd         Decimal       @default(0) @db.Decimal(14, 6)
+  latencyMs       Int           @default(0)
+  ttftMs          Int?
+  retryCount      Int           @default(0)
+  fallbackUsed    Boolean       @default(false)
+  errorCode       String?
+  errorMessage    String?
+  clientIp        String?
+  userAgent       String?
+  createdAt       DateTime      @default(now())
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  apiKey  ProjectApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  model   Model?         @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  policy  RoutingPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  usage   UsageRecord?
+  costs   CostRecord[]
+
+  @@index([projectId, createdAt])
+  @@index([orgId, createdAt])
+  @@index([modelId, createdAt])
+  @@index([status, createdAt])
+  @@index([traceId])
+}
+
+model UsageRecord {
+  id           String   @id @default(uuid()) @db.Uuid
+  requestId    String   @unique @db.Uuid
+  projectId    String   @db.Uuid
+  providerId   String?  @db.Uuid
+  modelId      String?  @db.Uuid
+  pricingId    String?  @db.Uuid
+  modality     Modality @default(TEXT)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  imageCount   Int      @default(0)
+  audioSeconds Decimal  @default(0) @db.Decimal(12, 3)
+  gpuMs        Int      @default(0)
+  costUsd      Decimal  @default(0) @db.Decimal(14, 6)
+  createdAt    DateTime @default(now())
+
+  request  AiRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  provider Provider?     @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  model    Model?        @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  pricing  ModelPricing? @relation(fields: [pricingId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([modelId, createdAt])
+  @@index([providerId, createdAt])
+}
+
+model CostRecord {
+  id         String   @id @default(uuid()) @db.Uuid
+  requestId  String?  @db.Uuid
+  projectId  String   @db.Uuid
+  providerId String?  @db.Uuid
+  modelId    String?  @db.Uuid
+  pricingId  String?  @db.Uuid
+  kind       String   @default("INFERENCE") // INFERENCE | GPU
+  amountUsd  Decimal  @db.Decimal(14, 6)
+  createdAt  DateTime @default(now())
+
+  request  AiRequest?    @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  provider Provider?     @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  model    Model?        @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  pricing  ModelPricing? @relation(fields: [pricingId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([modelId, createdAt])
+  @@index([providerId, createdAt])
+  @@index([kind, createdAt])
+}
+
+model Budget {
+  id           String       @id @default(uuid()) @db.Uuid
+  projectId    String       @db.Uuid
+  period       BudgetPeriod
+  limitUsd     Decimal      @db.Decimal(14, 6)
+  softLimitPct Int          @default(80)
+  hardLimit    Boolean      @default(true)
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, period])
+  @@index([projectId, isActive])
+}
+
+model Alert {
+  id         String        @id @default(uuid()) @db.Uuid
+  orgId      String        @db.Uuid
+  projectId  String?       @db.Uuid
+  type       String
+  severity   AlertSeverity @default(WARNING)
+  title      String
+  message    String
+  metadata   Json          @default("{}")
+  status     AlertStatus   @default(OPEN)
+  createdAt  DateTime      @default(now())
+  resolvedAt DateTime?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, status, createdAt])
+  @@index([projectId, status])
+}
+
+// ───────────────────── Fine-tuning / datasets (Phase 4) ───────────────────
+
+model Dataset {
+  id          String        @id @default(uuid()) @db.Uuid
+  projectId   String        @db.Uuid
+  name        String
+  description String?
+  status      DatasetStatus @default(UPLOADED)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  project  Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions DatasetVersion[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model DatasetVersion {
+  id         String        @id @default(uuid()) @db.Uuid
+  datasetId  String        @db.Uuid
+  version    Int
+  storageKey String
+  rowCount   Int           @default(0)
+  sizeBytes  BigInt        @default(0)
+  checksum   String?
+  status     DatasetStatus @default(UPLOADED)
+  validation Json          @default("{}")
+  createdAt  DateTime      @default(now())
+
+  dataset      Dataset           @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  trainingJobs TrainingJob[]
+  evaluations  ModelEvaluation[]
+
+  @@unique([datasetId, version])
+  @@index([datasetId])
+}
+
+model TrainingJob {
+  id               String         @id @default(uuid()) @db.Uuid
+  projectId        String         @db.Uuid
+  datasetVersionId String         @db.Uuid
+  baseModelId      String         @db.Uuid
+  method           String         @default("LORA") // LORA | QLORA
+  config           Json           @default("{}")
+  status           TrainingStatus @default(QUEUED)
+  progress         Int            @default(0)
+  metrics          Json           @default("{}")
+  logsUrl          String?
+  error            String?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  datasetVersion DatasetVersion  @relation(fields: [datasetVersionId], references: [id], onDelete: Restrict)
+  baseModel      Model           @relation("TrainingBaseModel", fields: [baseModelId], references: [id], onDelete: Restrict)
+  fineTunedModel FineTunedModel?
+
+  @@index([projectId, status, createdAt])
+}
+
+model FineTunedModel {
+  id               String           @id @default(uuid()) @db.Uuid
+  projectId        String           @db.Uuid
+  trainingJobId    String           @unique @db.Uuid
+  baseModelId      String           @db.Uuid
+  deployedModelId  String?          @db.Uuid
+  name             String
+  version          Int              @default(1)
+  artifactUri      String?
+  evaluationStatus EvaluationStatus @default(PENDING)
+  createdAt        DateTime         @default(now())
+
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  trainingJob   TrainingJob       @relation(fields: [trainingJobId], references: [id], onDelete: Cascade)
+  baseModel     Model             @relation("FineTunedBaseModel", fields: [baseModelId], references: [id], onDelete: Restrict)
+  deployedModel Model?            @relation("FineTunedDeployment", fields: [deployedModelId], references: [id], onDelete: SetNull)
+  evaluations   ModelEvaluation[]
+
+  @@unique([projectId, name, version])
+  @@index([projectId])
+}
+
+model ModelEvaluation {
+  id               String           @id @default(uuid()) @db.Uuid
+  orgId            String           @db.Uuid
+  modelId          String?          @db.Uuid
+  fineTunedModelId String?          @db.Uuid
+  datasetVersionId String           @db.Uuid
+  baselineModelId  String           @db.Uuid
+  metrics          Json             @default("{}")
+  status           EvaluationStatus @default(PENDING)
+  createdAt        DateTime         @default(now())
+  finishedAt       DateTime?
+
+  model          Model?          @relation("EvaluatedModel", fields: [modelId], references: [id], onDelete: SetNull)
+  fineTunedModel FineTunedModel? @relation(fields: [fineTunedModelId], references: [id], onDelete: Cascade)
+  datasetVersion DatasetVersion  @relation(fields: [datasetVersionId], references: [id], onDelete: Restrict)
+  baselineModel  Model           @relation("BaselineModel", fields: [baselineModelId], references: [id], onDelete: Restrict)
+
+  @@index([orgId, status])
+  @@index([fineTunedModelId])
+}
+
+// ─────────────────────────────── RAG (Phase 4) ────────────────────────────
+
+model Document {
+  id        String         @id @default(uuid()) @db.Uuid
+  projectId String         @db.Uuid
+  title     String
+  sourceUri String?
+  mimeType  String?
+  version   Int            @default(1)
+  status    DocumentStatus @default(PENDING)
+  checksum  String?
+  metadata  Json           @default("{}")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chunks  DocumentChunk[]
+
+  @@unique([projectId, checksum])
+  @@index([projectId, status])
+}
+
+model DocumentChunk {
+  id               String   @id @default(uuid()) @db.Uuid
+  documentId       String   @db.Uuid
+  projectId        String   @db.Uuid
+  chunkIndex       Int
+  content          String
+  tokenCount       Int      @default(0)
+  embeddingModelId String?  @db.Uuid
+  // Phase 4 stores vectors here. Production deployments switch this column to
+  // pgvector `vector(1536)` via the documented migration; Phase 1 keeps JSON so
+  // local development does not require the extension.
+  embedding        Json?
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  document       Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  embeddingModel Model?   @relation(fields: [embeddingModelId], references: [id], onDelete: SetNull)
+
+  @@unique([documentId, chunkIndex])
+  @@index([projectId])
+}
+
+// ───────────────────────── Background jobs (Phase 2) ──────────────────────
+
+model BackgroundJob {
+  id             String      @id @default(uuid()) @db.Uuid
+  projectId      String      @db.Uuid
+  type           String
+  priority       JobPriority @default(NORMAL)
+  status         JobStatus   @default(QUEUED)
+  payload        Json        @default("{}")
+  result         Json?
+  progress       Int         @default(0)
+  attempts       Int         @default(0)
+  maxAttempts    Int         @default(3)
+  idempotencyKey String?
+  webhookUrl     String?
+  scheduledAt    DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  error          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, idempotencyKey])
+  @@index([projectId, status, priority, createdAt])
+  @@index([status, createdAt])
+}
+
+// ────────────────────────────── Audit trail ───────────────────────────────
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  orgId        String   @db.Uuid
+  actorId      String?  @db.Uuid
+  projectId    String?  @db.Uuid
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json     @default("{}")
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([actorId, createdAt])
+}

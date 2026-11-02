@@ -1,0 +1,186 @@
+name: ai-middleware
+
+x-gateway-build: &gateway-build
+  context: .
+  dockerfile: apps/gateway/Dockerfile
+
+x-gateway-env: &gateway-env
+  NODE_ENV: production
+  PORT: "4000"
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-ai_middleware}?schema=public
+  REDIS_URL: redis://redis:6379
+  CORS_ORIGINS: http://localhost:3000
+  DASHBOARD_URL: http://localhost:3000
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_middleware}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: *gateway-build
+    env_file: [.env]
+    environment:
+      <<: *gateway-env
+    command: ["sh", "-c", "pnpm exec prisma migrate deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    profiles: ["seed"]
+    build: *gateway-build
+    env_file: [.env]
+    environment:
+      <<: *gateway-env
+      SEED_DEMO_USAGE: "true"
+    command: ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec prisma db seed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build: *gateway-build
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      <<: *gateway-env
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health/live').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      GATEWAY_URL: http://gateway:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/login').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  ml-service:
+    profiles: ["ml"]
+    build:
+      context: apps/ml-service
+      dockerfile: Dockerfile
+      args:
+        ML_EXTRAS: ${ML_EXTRAS:-}
+    restart: unless-stopped
+    environment:
+      ML_ENVIRONMENT: production
+      ML_INTERNAL_TOKEN: ${ML_INTERNAL_TOKEN:-}
+      ML_MODEL_DIR: /models
+      ML_DEVICE: ${ML_DEVICE:-cpu}
+      ML_EMBEDDING_MODELS: ${ML_EMBEDDING_MODELS:-}
+      ML_RERANK_MODELS: ${ML_RERANK_MODELS:-}
+      ML_INFERENCE_MODELS: ${ML_INFERENCE_MODELS:-}
+      ML_PRELOAD_MODELS: ${ML_PRELOAD_MODELS:-}
+    volumes:
+      - ${ML_MODEL_DIR_HOST:-./models}:/models:ro
+    ports:
+      - "8000:8000"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:4000"]
+
+  # The ML service only exists under the `ml` Compose profile. Docker DNS
+  # discovery yields no target while it is absent, so Prometheus does not
+  # report a permanently failing scrape in the default stack.
+  - job_name: ml-service
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["ml-service"]
+        type: A
+        port: 8000
+        refresh_interval: 30s
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
