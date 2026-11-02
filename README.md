@@ -81,7 +81,7 @@ The dashboard needs `GATEWAY_URL` (or the legacy `ADMIN_API_URL`) only when the 
 cp .env.example .env
 docker compose build
 docker compose up -d postgres redis migrate gateway dashboard prometheus grafana
-docker compose --profile seed run --rm seed   # optional demo data
+docker compose --profile seed run --rm seed   # optional configuration seed (no traffic rows)
 ```
 
 | Service | URL |
@@ -145,8 +145,9 @@ uvicorn app.main:app --port 8000
 
 ## Development principles
 
-- Real provider calls and real metrics. The only synthetic behavior is the explicitly labelled
-  `MOCK` provider and optional `SEED_DEMO_USAGE` rows.
+- Real provider calls and real metrics. The only synthetic behavior is the `MOCK` provider, which
+  is disabled by default (opt in with `SEED_MOCK_PROVIDER=true` for isolated development). No
+  request, usage or cost rows are ever generated synthetically.
 - No hardcoded provider credentials, prices or model IDs in application code. Everything is
   configured through the admin API/seed and stored in PostgreSQL.
 - Provider integrations are modular adapters behind one interface.

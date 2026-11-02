@@ -14,4 +14,4 @@ process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? "error";
 process.env.RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED ?? "true";
 process.env.PROVIDER_MAX_RETRIES = process.env.PROVIDER_MAX_RETRIES ?? "1";
 process.env.MOCK_PROVIDER_LATENCY_MS = process.env.MOCK_PROVIDER_LATENCY_MS ?? "0";
-process.env.SEED_DEMO_USAGE = "false";
+process.env.SEED_MOCK_PROVIDER = "false";

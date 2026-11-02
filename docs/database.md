@@ -225,17 +225,15 @@ The seed is idempotent by natural keys (`org slug`, `(orgId, slug)` for provider
 projects, `(projectId, period)` for budgets). It creates:
 
 - organisation `Local AI Platform`, admin `admin@local.dev` (password from `SEED_ADMIN_PASSWORD`).
-- providers: mock, Ollama, OpenAI, Anthropic, Gemini (hosted providers are seeded disabled unless
-  environment credentials exist; mock is always usable).
-- seven models with real pricing or GPU cost, including two mock models.
+- providers: mock, Ollama, OpenAI, Anthropic, Gemini. Mock and hosted providers are seeded
+  disabled unless `SEED_MOCK_PROVIDER` / the corresponding environment credentials are set.
+- seven models with real pricing or GPU cost, including two mock models (disabled by default).
 - six routing policies (`balanced` is the organisation default).
 - projects `support-bot`, `content-studio`, `research-lab`, each with daily and monthly hard
   budgets, all models allowed, and a development API key shown once.
-- optional demo usage when `SEED_DEMO_USAGE=true`; rows are marked with
-  `routingDecision.seeded = true` and are never mixed with real traffic.
+- no request, usage or cost rows. Consumption is only ever recorded from real provider traffic.
 
-Demo usage is clearly labelled. No provider response or cost is fabricated outside that explicit
-flag.
+The seed never fabricates provider responses, requests or costs.
 
 ## 8. Operational notes
 

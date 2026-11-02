@@ -207,7 +207,7 @@ Phase 1 ships as containers:
 - `gateway` — Node 20, built monorepo image, runs `node dist/main.js`, non-root.
 - `dashboard` — Next.js standalone server, talks to the gateway over the Compose network.
 - `migrate` — one-shot `prisma migrate deploy`; a Kubernetes init job can replace it.
-- `seed` — optional one-shot profile for local demo data.
+- `seed` — optional one-shot profile that creates configuration only (no request rows).
 - `postgres`, `redis` — stateful services with volumes and health checks.
 - `ml-service` — optional `ml` profile, only useful with real model extras installed.
 - `prometheus`, `grafana` — scraping and dashboards.

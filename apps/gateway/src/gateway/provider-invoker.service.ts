@@ -113,6 +113,11 @@ export class ProviderInvokerService {
       }
 
       const runtime = this.runtime.toRuntime(provider);
+      const candidateInvocation: ChatInvocation = {
+        ...invocation,
+        externalModelId: candidate.externalModelId,
+        maxTokens: Math.max(1, Math.min(invocation.maxTokens, candidate.maxOutputTokens)),
+      };
       for (let attempt = 0; attempt <= this.config.providerMaxRetries; attempt += 1) {
         if (signal.aborted) {
           throw new AppError("Request cancelled by client", {
@@ -125,7 +130,7 @@ export class ProviderInvokerService {
           const timeoutMs = Math.min(runtime.timeoutMs, this.config.providerTimeoutMs);
           const result = await this.registry
             .get(provider.type)
-            .chat(runtime, invocation, withTimeout(signal, timeoutMs));
+            .chat(runtime, candidateInvocation, withTimeout(signal, timeoutMs));
           this.circuit.recordSuccess(provider.id);
           attempts.push({
             providerId: provider.id,
@@ -231,6 +236,10 @@ export class ProviderInvokerService {
       }
       const runtime = this.runtime.toRuntime(provider);
       const adapter = this.registry.get(provider.type);
+      const candidateInvocation = {
+        ...invocation,
+        externalModelId: candidate.externalModelId,
+      };
       if (!adapter.embeddings) {
         attempts.push({
           providerId: provider.id,
@@ -258,7 +267,7 @@ export class ProviderInvokerService {
           const timeoutMs = Math.min(runtime.timeoutMs, this.config.providerTimeoutMs);
           const result = await adapter.embeddings(
             runtime,
-            invocation,
+            candidateInvocation,
             withTimeout(signal, timeoutMs),
           );
           this.circuit.recordSuccess(provider.id);
@@ -361,6 +370,11 @@ export class ProviderInvokerService {
       }
 
       const runtime = this.runtime.toRuntime(provider);
+      const candidateInvocation: ChatInvocation = {
+        ...invocation,
+        externalModelId: candidate.externalModelId,
+        maxTokens: Math.max(1, Math.min(invocation.maxTokens, candidate.maxOutputTokens)),
+      };
       const idle = createIdleTimeout(
         signal,
         Math.min(runtime.timeoutMs, this.config.providerTimeoutMs),
@@ -368,7 +382,7 @@ export class ProviderInvokerService {
       try {
         const source = this.registry
           .get(provider.type)
-          .streamChat(runtime, invocation, idle.signal);
+          .streamChat(runtime, candidateInvocation, idle.signal);
         const iterator = source[Symbol.asyncIterator]();
         const first = await iterator.next();
         this.circuit.recordSuccess(provider.id);

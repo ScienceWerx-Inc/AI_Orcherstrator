@@ -65,14 +65,13 @@ ONBOARD_ADMIN_PASSWORD="$(openssl rand -base64 18)" \
 ONBOARD_PROJECTS="sciencewerx:ScienceWerx,morewerx:MoreWerx" \
 ONBOARD_MONTHLY_BUDGET_USD=500 \
 ONBOARD_DAILY_BUDGET_USD=25 \
-ONBOARD_DEMO_USAGE=true \
 pnpm onboard
 ```
 
-Without `ONBOARD_ADMIN_PASSWORD` the script generates one and prints it once. Demo usage rows
-are written only to projects that have no traffic yet and are labelled
-`routingDecision.seeded = true`. `ONBOARD_ARCHIVE_SLUGS` archives old demo projects
-(comma-separated slugs).
+Without `ONBOARD_ADMIN_PASSWORD` the script generates one and prints it once. It writes no
+request, usage or cost rows: consumption only appears when a real provider serves traffic. It
+attaches only non-mock models. `ONBOARD_ARCHIVE_SLUGS` archives old projects (comma-separated
+slugs).
 
 ### Environment files
 
@@ -101,11 +100,10 @@ psql "$DATABASE_URL" -c 'select slug, kind, "isDefault" from "RoutingPolicy";'
 Migrations run in the `migrate` Compose service. In Kubernetes, run
 `pnpm exec prisma migrate deploy` as an init job before starting new gateway pods.
 
-Seed demo usage (optional, explicitly labelled):
-
-```bash
-SEED_DEMO_USAGE=true pnpm db:seed
-```
+The seed writes configuration only; it never creates request, usage or cost rows. The mock
+provider and its models are seeded disabled unless `SEED_MOCK_PROVIDER=true`, so a default
+seeded environment only produces real provider traffic. Mock models are only added to project
+allowlists when that flag is set.
 
 ## 4. Tests and checks
 

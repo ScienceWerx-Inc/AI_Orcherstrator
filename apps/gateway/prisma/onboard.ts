@@ -1,15 +1,15 @@
 /* Idempotent onboarding for a product organisation.
  *
  * Creates (or updates) the admin account, one gateway project per product,
- * budgets, an application API key and optional clearly-labelled demo usage.
- * Re-running it rotates the admin password if ONBOARD_ADMIN_PASSWORD is set,
- * and leaves existing API keys alone (their plaintext cannot be recovered).
+ * budgets and an application API key. It never writes request, usage or cost
+ * rows: all consumption comes from real provider traffic. Re-running it rotates
+ * the admin password if ONBOARD_ADMIN_PASSWORD is set, and leaves existing API
+ * keys alone (their plaintext cannot be recovered).
  *
  *   ONBOARD_ORG_NAME="ScienceWerx" \
  *   ONBOARD_ADMIN_EMAIL="admin@sciencewerx.org" \
  *   ONBOARD_ADMIN_PASSWORD="…" \
  *   ONBOARD_PROJECTS="sciencewerx:ScienceWerx,morewerx:MoreWerx" \
- *   ONBOARD_DEMO_USAGE=true \
  *   pnpm onboard
  */
 import { randomBytes } from "node:crypto";
@@ -22,15 +22,8 @@ loadEnv({ path: path.resolve(__dirname, "../../.env") });
 
 import { hashPassword } from "../src/common/crypto/password";
 import { generateApiKey } from "../src/common/crypto/api-key";
-import { generateDemoUsage } from "./demo-usage";
 
 const prisma = new PrismaClient();
-
-function envFlag(name: string, fallback = false): boolean {
-  const value = process.env[name];
-  if (value === undefined) return fallback;
-  return ["true", "1", "yes"].includes(value.toLowerCase());
-}
 
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -83,10 +76,12 @@ async function main(): Promise<void> {
     console.warn("No routing policy exists for this organisation; create one in the dashboard.");
   }
 
-  const models = await prisma.model.findMany({ where: { orgId: org.id } });
+  const models = await prisma.model.findMany({
+    where: { orgId: org.id, provider: { type: { not: "MOCK" } } },
+  });
   if (models.length === 0) {
     console.warn(
-      "No models are registered for this organisation. Register providers/models in the dashboard before sending traffic.",
+      "No real models are registered for this organisation. Register providers/models in the dashboard before sending traffic.",
     );
   }
 
@@ -97,7 +92,6 @@ async function main(): Promise<void> {
   const dailyBudget = numberEnv("ONBOARD_DAILY_BUDGET_USD", 25);
 
   const issuedKeys: Array<{ project: string; key: string }> = [];
-  const projectIds: string[] = [];
 
   for (const input of projectInputs) {
     const project = await prisma.project.upsert({
@@ -118,7 +112,6 @@ async function main(): Promise<void> {
         allowedModalities: ["TEXT"],
       },
     });
-    projectIds.push(project.id);
 
     if (models.length > 0) {
       await prisma.projectModel.createMany({
@@ -166,12 +159,7 @@ async function main(): Promise<void> {
       where: { orgId: org.id, slug: { in: archive } },
       data: { status: "ARCHIVED" },
     });
-    if (archived.count > 0) console.log(`Archived ${archived.count} demo project(s): ${archive.join(", ")}`);
-  }
-
-  let seeded = 0;
-  if (envFlag("ONBOARD_DEMO_USAGE", false) && projectIds.length > 0) {
-    seeded = await generateDemoUsage(prisma, { orgId: org.id, projectIds });
+    if (archived.count > 0) console.log(`Archived ${archived.count} project(s): ${archive.join(", ")}`);
   }
 
   console.log("\n──────────────────────────────────────────────────────────");
@@ -182,7 +170,6 @@ async function main(): Promise<void> {
   console.log(`  Role         : OWNER`);
   console.log(`  Projects     : ${projectInputs.map((project) => project.slug).join(", ")}`);
   console.log(`  Budgets      : $${dailyBudget}/day, $${monthlyBudget}/month (hard limits)`);
-  if (seeded > 0) console.log(`  Demo usage   : ${seeded} labelled rows (routingDecision.seeded = true)`);
   if (issuedKeys.length > 0) {
     console.log("\n  Application API keys (shown once):");
     for (const entry of issuedKeys) console.log(`    ${entry.project.padEnd(14)} ${entry.key}`);

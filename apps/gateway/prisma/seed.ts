@@ -1,7 +1,8 @@
 /* Development seed: creates a local organization, providers, models, routing
- * policies, projects, budgets and (optionally) demo usage. Never use the seeded
- * credentials in a shared or production environment. */
-import { randomUUID } from "node:crypto";
+ * policies, projects and budgets. It never writes request/usage/cost rows.
+ * The mock provider is disabled unless SEED_MOCK_PROVIDER=true, so a seeded
+ * environment only produces real provider traffic by default. Never use the
+ * seeded credentials in a shared or production environment. */
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
 import { PrismaClient, type ModelType, type Modality, type ProviderType } from "@prisma/client";
@@ -20,17 +21,6 @@ const cipher = new SecretCipher(
 
 function envFlag(name: string): boolean {
   return ["true", "1", "yes"].includes((process.env[name] ?? "").toLowerCase());
-}
-
-function rng(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state |= 0;
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 async function ensurePricing(
@@ -88,7 +78,7 @@ async function main(): Promise<void> {
       slug: "mock",
       type: "MOCK",
       credentials: {},
-      status: "ACTIVE",
+      status: envFlag("SEED_MOCK_PROVIDER") ? "ACTIVE" : "DISABLED",
       priority: 5,
     },
     {
@@ -323,7 +313,13 @@ async function main(): Promise<void> {
   const embeddingModelIds = ["mock-embed-small", "text-embedding-3-small"].map(
     (slug) => models.get(slug)!.id,
   );
-  const allModelIds = [...chatModelIds, ...embeddingModelIds];
+  const mockModelIds = ["mock-chat-small", "mock-embed-small"].map((slug) => models.get(slug)!.id);
+  const mockEnabled = envFlag("SEED_MOCK_PROVIDER");
+  // Real traffic by default: mock models are only allowlisted when the mock
+  // provider is explicitly enabled for development.
+  const allModelIds = [...chatModelIds, ...embeddingModelIds].filter(
+    (modelId) => mockEnabled || !mockModelIds.includes(modelId),
+  );
 
   const policies = [
     {
@@ -364,7 +360,7 @@ async function main(): Promise<void> {
       kind: "PREFERRED_FALLBACK" as const,
       isDefault: false,
       description: "Try the preferred model, then fall back",
-      config: { preferredModelIds: [chatModelIds[2], chatModelIds[3], chatModelIds[0]] },
+      config: { preferredModelIds: [chatModelIds[2], chatModelIds[3], chatModelIds[4]] },
     },
     {
       name: "Task based",
@@ -374,7 +370,7 @@ async function main(): Promise<void> {
       description: "Task-specific model preferences",
       config: {
         taskModelMap: {
-          classification: [chatModelIds[0], chatModelIds[2]],
+          classification: [chatModelIds[2], chatModelIds[1]],
           summarization: [chatModelIds[2], chatModelIds[4]],
           reasoning: [chatModelIds[3], chatModelIds[4], chatModelIds[2]],
         },
@@ -499,122 +495,6 @@ async function main(): Promise<void> {
         },
       });
       devKeys.push({ project: input.slug, key: generated.plaintext });
-    }
-  }
-
-  if (envFlag("SEED_DEMO_USAGE")) {
-    const existingDemo = await prisma.aiRequest.count({
-      where: { orgId: org.id, routingDecision: { path: ["seeded"], equals: true } },
-    });
-    if (existingDemo === 0) {
-      const random = rng(42);
-      const demoProjects = await prisma.project.findMany({
-        where: { orgId: org.id },
-        include: { allowedModels: { include: { model: { include: { pricing: true, provider: true } } } } },
-      });
-      let created = 0;
-      for (const project of demoProjects) {
-        const chatModels = project.allowedModels
-          .map((entry) => entry.model)
-          .filter((model) => model.modelType === "CHAT");
-        for (let day = 13; day >= 0; day -= 1) {
-          const requestsToday = 3 + Math.floor(random() * 8);
-          for (let index = 0; index < requestsToday; index += 1) {
-            const model = chatModels[Math.floor(random() * chatModels.length)];
-            if (!model) continue;
-            const pricing = model.pricing[0];
-            const inputTokens = 200 + Math.floor(random() * 1800);
-            const outputTokens = 80 + Math.floor(random() * 700);
-            const latencyMs = Math.floor(model.expectedLatencyMs * (0.6 + random() * 1.2));
-            const failed = random() < 0.04;
-            const ts = new Date(Date.now() - day * 86_400_000 - Math.floor(random() * 86_400_000));
-            const inference = pricing
-              ? (Number(pricing.inputPer1m) * inputTokens + Number(pricing.outputPer1m) * outputTokens) /
-                1_000_000
-              : 0;
-            const gpuMs = model.deploymentKind === "SELF_HOSTED" ? latencyMs : 0;
-            const gpuCost =
-              model.gpuHourlyCostUsd && gpuMs
-                ? (Number(model.gpuHourlyCostUsd) * gpuMs) / 3_600_000
-                : 0;
-            const cost = failed ? 0 : inference + gpuCost;
-            await prisma.aiRequest.create({
-              data: {
-                traceId: randomUUID(),
-                orgId: org.id,
-                projectId: project.id,
-                providerId: model.providerId,
-                modelId: model.id,
-                endpoint: "/v1/chat/completions",
-                status: failed ? "FAILED" : "SUCCEEDED",
-                httpStatus: failed ? 502 : 200,
-                routingDecision: {
-                  seeded: true,
-                  policy: { name: "seed", kind: "CUSTOM_WEIGHTED" },
-                  baselineCostUsd: cost * (1.3 + random()),
-                  selected: { model: model.slug, provider: model.provider.name },
-                },
-                inputTokens,
-                outputTokens: failed ? 0 : outputTokens,
-                totalTokens: failed ? inputTokens : inputTokens + outputTokens,
-                costUsd: cost,
-                latencyMs,
-                ttftMs: Math.floor(latencyMs * 0.25),
-                retryCount: failed ? 1 : 0,
-                fallbackUsed: failed,
-                errorCode: failed ? "provider_unavailable" : null,
-                createdAt: ts,
-                usage: {
-                  create: {
-                    projectId: project.id,
-                    providerId: model.providerId,
-                    modelId: model.id,
-                    pricingId: pricing?.id,
-                    inputTokens,
-                    outputTokens: failed ? 0 : outputTokens,
-                    gpuMs,
-                    costUsd: cost,
-                    createdAt: ts,
-                  },
-                },
-                costs: {
-                  create: [
-                    ...(inference > 0 && !failed
-                      ? [
-                          {
-                            projectId: project.id,
-                            providerId: model.providerId,
-                            modelId: model.id,
-                            pricingId: pricing?.id,
-                            kind: "INFERENCE",
-                            amountUsd: inference,
-                            createdAt: ts,
-                          },
-                        ]
-                      : []),
-                    ...(gpuCost > 0 && !failed
-                      ? [
-                          {
-                            projectId: project.id,
-                            providerId: model.providerId,
-                            modelId: model.id,
-                            kind: "GPU",
-                            amountUsd: gpuCost,
-                            createdAt: ts,
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              },
-            });
-            created += 1;
-          }
-        }
-      }
-      console.log(`Seeded ${created} demo requests (SEED_DEMO_USAGE=true).`);
-    } else {
-      console.log("Demo usage already present; skipping regeneration.");
     }
   }
 

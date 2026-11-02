@@ -61,7 +61,9 @@ services:
     env_file: [.env]
     environment:
       <<: *gateway-env
-      SEED_DEMO_USAGE: "true"
+      # Opt-in only: the mock provider writes synthetic responses and must never
+      # be enabled on a deployment that records production consumption.
+      SEED_MOCK_PROVIDER: "${SEED_MOCK_PROVIDER:-false}"
     command: ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec prisma db seed"]
     depends_on:
       postgres:
